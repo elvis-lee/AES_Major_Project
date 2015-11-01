@@ -1,0 +1,222 @@
+/***************************** Include Files ********************************/
+
+#include "xtft.h"
+#include "xparameters.h"
+#include "xuartps_hw.h"
+
+/************************** Constant Definitions ****************************/
+/**
+ * The following constants map to the XPAR parameters created in the
+ * xparameters.h file. They are defined here such that a user can easily
+ * change all the needed parameters in one place.
+ */
+#define TFT_DEVICE_ID    XPAR_TFT_0_DEVICE_ID
+#define DDR_HIGH_ADDR    XPAR_PS7_DDR_0_S_AXI_HIGHADDR 
+
+#ifdef XPAR_V6DDR_0_S_AXI_HIGHADDR
+#define DDR_HIGH_ADDR		XPAR_V6DDR_0_S_AXI_HIGHADDR
+#elif XPAR_S6DDR_0_S0_AXI_HIGHADDR
+#define DDR_HIGH_ADDR		XPAR_S6DDR_0_S0_AXI_HIGHADDR
+#elif XPAR_AXI_7SDDR_0_S_AXI_HIGHADDR
+#define DDR_HIGH_ADDR		XPAR_AXI_7SDDR_0_S_AXI_HIGHADDR
+#elif XPAR_MPMC_0_MPMC_HIGHADDR
+#define DDR_HIGH_ADDR		XPAR_MPMC_0_MPMC_HIGHADDR
+#endif
+
+#ifndef DDR_HIGH_ADDR
+#warning "CHECK FOR THE VALID DDR ADDRESS IN XPARAMETERS.H"
+#endif
+
+#define DISPLAY_COLUMNS  640
+#define DISPLAY_ROWS     480
+
+/**
+ * User has to specify a 2MB memory space for filling the frame data.
+ * This constant has to be updated based on the memory map of the
+ * system.
+ */
+#define TFT_FRAME_ADDR        DDR_HIGH_ADDR - 0x001FFFFF
+
+/**************************** Type Definitions ******************************/
+
+/************************** Function Prototypes *****************************/
+
+int Tft4218Example(u32 TftDeviceId);
+int XTft_DrawSolidBox(XTft *Tft, int x1, int y1, int x2, int y2,
+		unsigned int col);
+void printColor(unsigned short val, int j, int i);
+
+/************************** Variable Definitions ****************************/
+
+static XTft TftInstance;
+
+/************************** Function Definitions ****************************/
+/*****************************************************************************/
+/**
+ *
+ * Main function that invokes the Tft example.
+ *
+ * @param    None.
+ *
+ * @return
+ *        - XST_SUCCESS if successful.
+ *        - XST_FAILURE if unsuccessful.
+ *
+ * @note        None.
+ *
+ ******************************************************************************/
+int main() {
+	int Status;
+	Xil_DCacheDisable();
+	Status = Tft4218Example(TFT_DEVICE_ID);
+	if (Status != XST_SUCCESS) {
+		return XST_FAILURE;
+	}
+	return XST_SUCCESS;
+}
+
+void printColor(unsigned short val, int j, int i) {
+
+	if (val == 0x0000)	//000 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x00000000);
+	else if (val == 0x2000)	//001 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x000000ff);
+	else if (val == 0x4000)	//010 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x0000ff00);
+	else if (val == 0x8000)	//100 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x00ff0000);
+	else if (val == 0xa000)	//101 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x00ff00ff);
+	else if (val == 0xc000)	//110 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x00fffff00);
+	else if (val == 0x6000)	//011 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x0000ffff);
+	else if (val == 0xe000)	//111 0 0000
+		XTft_SetPixel(&TftInstance, j, i, 0x00ffffff);
+
+}
+int Tft4218Example(u32 TftDeviceId) {
+	int Status;
+	XTft_Config *TftConfigPtr;
+	unsigned int *col;
+
+	int i, j, k;
+	unsigned char test[2];
+	unsigned short temp;
+	unsigned short pixel;
+	unsigned short mask = 0xe000;
+	//unsigned short buffer[30720/2];
+	unsigned short* buffer = (unsigned short*) malloc(
+			sizeof(unsigned short) * 30720 / 2);
+
+	/*
+	 * Get address of the XTft_Config structure for the given device id.
+	 */
+	TftConfigPtr = XTft_LookupConfig(TftDeviceId);
+	if (TftConfigPtr == (XTft_Config *) NULL ) {
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Initialize all the TftInstance members and fills the screen with
+	 * default background color.
+	 */
+	Status = XTft_CfgInitialize(&TftInstance, TftConfigPtr,
+			TftConfigPtr->BaseAddress);
+	if (Status != XST_SUCCESS) {
+		return XST_FAILURE;
+	}
+
+	/*
+	 * Wait till Vsync(Video address latch) status bit is set before writing
+	 * the frame address into the Address Register. This ensures that the
+	 * current frame has been displayed and we can display a new frame of
+	 * data. Checking the Vsync state ensures that there is no data flicker
+	 * when displaying frames in real time though there is some delay due to
+	 * polling.
+	 */
+	while (XTft_GetVsyncStatus(&TftInstance) != XTFT_IESR_VADDRLATCH_STATUS_MASK)
+		;
+
+	/*
+	 * Change the Video Memory Base Address from default value to
+	 * a valid Memory Address and clear the screen.
+	 */
+	XTft_SetFrameBaseAddr(&TftInstance, TFT_FRAME_ADDR);
+	XTft_ClearScreen(&TftInstance);
+	XTft_DisableDisplay(&TftInstance);
+	print("Finish initializing TFT\n\r");
+
+	print("  Display color ");
+	print("\r\n");
+	XTft_SetColor(&TftInstance, 0, 0);
+	XTft_ClearScreen(&TftInstance);
+
+	print("  Writing Color Bar Pattern\r\n");
+
+	int count = 0;
+
+	for (i = 0; i < 30720 / 2; i++) {
+		test[1] = XUartPs_RecvByte(0xE0001000);
+		test[0] = XUartPs_RecvByte(0xE0001000);
+		buffer[i] = *(unsigned short*) test;
+	}
+
+	for (i = 0; i < 240; i++) {
+		for (j = 0; j < 320; j += 5) {
+
+			pixel = buffer[count];
+			count++;
+
+			for (k = j; k < j + 5; k++) {
+				temp = (pixel & mask);
+				printColor(temp, k, i);
+
+				pixel = pixel << 3;
+
+			}
+		}
+	}
+
+	XTft_EnableDisplay(&TftInstance);
+	free(buffer);
+
+	print("  TFT test completed!\r\n");
+	print("  You should see vertical color and grayscale bars\r\n");
+	print("  across your VGA Output Monitor\r\n\r\n");
+	return 0;
+}
+
+int XTft_DrawSolidBox(XTft *Tft, int x1, int y1, int x2, int y2,
+		unsigned int col) {
+	int xmin, xmax, ymin, ymax, i, j;
+
+	if (x1 >= 0 && x1 <= DISPLAY_COLUMNS - 1 && x2 >= 0
+			&& x2 <= DISPLAY_COLUMNS - 1 && y1 >= 0 && y1 <= DISPLAY_ROWS - 1
+			&& y2 >= 0 && y2 <= DISPLAY_ROWS - 1) {
+		if (x2 < x1) {
+			xmin = x2;
+			xmax = x1;
+		} else {
+			xmin = x1;
+			xmax = x2;
+		}
+		if (y2 < y1) {
+			ymin = y2;
+			ymax = y1;
+		} else {
+			ymin = y1;
+			ymax = y2;
+		}
+
+		for (i = xmin; i <= xmax; i++) {
+			for (j = ymin; j <= ymax; j++) {
+				XTft_SetPixel(Tft, i, j, col);
+			}
+		}
+		return 0;
+	}
+	return 1;
+
+}
+
